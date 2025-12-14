@@ -15,6 +15,7 @@ import SmoothScreen from "./components/SmoothScreen";
 import { useRouter } from "expo-router";
 import { getSearchHistory, subscribeSearchHistory, clearSearchHistory, SearchEntry } from "../services/searchHistory";
 
+// History is now stored per-user in Supabase via services/searchHistory
 
 // Responsive helpers
 const { width, height } = Dimensions.get("window");
@@ -280,7 +281,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     ...Platform.select({
       ios: {
-        shadowColor: "#444", 
+        shadowColor: "#444", // gray shadow outline
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.6,
         shadowRadius: 10,
@@ -333,6 +334,7 @@ const styles = StyleSheet.create({
     color: '#FFD166',
     fontWeight: '900',
   },
+  // legacy row styles left for compatibility (unused)
   row: {
     flexDirection: "row",
     alignItems: "center",

@@ -51,7 +51,8 @@ import { optimizeRoute } from '../services/routeOptimization';
 
 const GOLD = '#FFDE59';
 const GRAY = '#9CA3AF';
-const SELECTED_PIN = '#FFD166'; 
+const SELECTED_PIN = '#FFD166'; // selected destination pin (gold)
+
 type Place = {
   name: string;
   address?: string | null;
@@ -367,6 +368,7 @@ const MapScreen: React.FC = () => {
   const addRecentFrom = async (p: Place | null) => {
     try {
       if (!p) return;
+      // only store places within the Philippines
       const lat = Number(p.lat);
       const lon = Number(p.lon);
       if (!(isFinite(lat) && isFinite(lon))) return;
@@ -1182,7 +1184,7 @@ useEffect(() => {
     } catch {}
   } else if (activeField === 'to') {
     setDestinationPlace(item);
-    setDestinationPhrase(shortAddress(item.name)); 
+    setDestinationPhrase(shortAddress(item.name)); // This should be set properly
   }
   try {
     if (activeField === 'to') {
@@ -1206,6 +1208,7 @@ useEffect(() => {
       ? { latitude: item.lat, longitude: item.lon }
       : currentDestinationCoord;
 
+  // Check if the destination coordinates are correctly set
   console.log('Selected Destination:', to);
 
   setTimeout(() => {

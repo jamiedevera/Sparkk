@@ -20,6 +20,7 @@ import { Roboto_400Regular } from "@expo-google-fonts/roboto";
 import { supabase } from "../services/supabaseClient";
 import ThemedPrompt from "../components/ThemedPrompt";
 
+// Black & Yellow palette
 const GOLD = "#FFDE59";
 const YELLOW_GLOW = "rgba(255, 209, 102, 0.45)";
 const AMBER = "#FFB84D";

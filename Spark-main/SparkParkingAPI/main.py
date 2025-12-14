@@ -3,26 +3,25 @@ from typing import Optional, List, Dict, Any
 from math import radians, sin, cos, asin, sqrt
 import re
 import math
+import os
+import logging
+
+import numpy as np
+import pandas as pd
+import joblib
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
-import joblib
-import numpy as np
-import pandas as pd
-import os
-import json
-from urllib import request as urlrequest
-from urllib.parse import urlencode
-from urllib.error import URLError
-import logging
 
-# FastAPI app setup
+# ======================================================
+# FastAPI App Setup
+# ======================================================
 app = FastAPI(
     title="Spark Parking Recommender API",
-    version="1.0.0",
-    description="API for recommending parking spots",
+    version="1.1.0",
+    description="API for recommending parking areas and analyzing user feedback",
 )
 
 app.add_middleware(
@@ -33,9 +32,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Helper functions
+logging.basicConfig(level=logging.INFO)
+
+# ======================================================
+# Helper Functions
+# ======================================================
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Compute distance in km between two lat/lng points."""
     R = 6371.0
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
     dlat = lat2 - lat1
@@ -45,7 +47,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * c
 
 def yn_to_int(val: Any) -> int:
-    """Convert YES/NO (or similar) to 1/0."""
     if isinstance(val, str):
         s = val.strip().upper()
         if s.startswith("Y"):
@@ -57,7 +58,6 @@ def yn_to_int(val: Any) -> int:
     return 0
 
 def discount_to_int(val: Any) -> int:
-    """Convert PWD/SC DISCOUNT text to 1/0."""
     if isinstance(val, str):
         s = val.strip().upper()
         if "EXEMPT" in s or "DISCOUNT" in s or "YES" in s:
@@ -65,10 +65,9 @@ def discount_to_int(val: Any) -> int:
     return 0
 
 def rate_to_float(val: Any) -> float:
-    """Extract a numeric INITIAL RATE; return 0.0 if missing."""
     if isinstance(val, (int, float)):
         try:
-            if np.isnan(val):  # type: ignore
+            if np.isnan(val):
                 return 0.0
         except Exception:
             pass
@@ -80,14 +79,13 @@ def rate_to_float(val: Any) -> float:
     return 0.0
 
 def parse_hour_from_str(s: Any) -> Optional[int]:
-    """Parse hour from strings like '6:00 AM', '7:00PM'. Returns hour in 0–23, or None if unknown."""
     if not isinstance(s, str):
         return None
     s = s.strip()
     if not s or s.upper() == "N/A":
         return None
-    if "24/7" in s:
-        return 0  # treat 24/7 specially
+    if "24/7" in s.upper():
+        return 0
     try:
         dt = pd.to_datetime(s, errors="coerce")
         if pd.isna(dt):
@@ -97,41 +95,35 @@ def parse_hour_from_str(s: Any) -> Optional[int]:
         return None
 
 def compute_open_now(opening: Any, closing: Any, hour: int) -> int:
-    """Compute open_now (1/0) based on opening/closing times."""
     if isinstance(opening, str) and "24/7" in opening.upper():
-        print(f"Parking is open 24/7. Open now: {1}")
         return 1
     if isinstance(closing, str) and "24/7" in closing.upper():
-        print(f"Parking is open 24/7. Open now: {1}")
         return 1
+
     open_h = parse_hour_from_str(opening)
     close_h = parse_hour_from_str(closing)
-    
-    print(f"Parsed times: Opening - {open_h}, Closing - {close_h}")
-    
-    if open_h is None or close_h is None:
-        print(f"Invalid hours: Opening - {opening}, Closing - {closing}. Open now: {1}")
-        return 1  # Default to open if hours are not valid
-    if open_h == close_h:
-        print(f"Opening and closing times are the same. Open now: {1}")
-        return 1
-    if open_h < close_h:
-        open_now = int(open_h <= hour < close_h)
-        print(f"Open now: {open_now} (open_h: {open_h}, hour: {hour}, close_h: {close_h})")
-        return open_now
-    else:
-        open_now = int(hour >= open_h or hour < close_h)
-        print(f"Open now: {open_now} (open_h: {open_h}, hour: {hour}, close_h: {close_h})")
-        return open_now
 
-# Load Excel metadata
-def load_parking_excel(path: str = "./PARKING.xlsx") -> List[Dict[str, Any]]:
-    """Load parking data from Excel file."""
+    if open_h is None or close_h is None:
+        return 1
+
+    if open_h == close_h:
+        return 1
+
+    if open_h < close_h:
+        return int(open_h <= hour < close_h)
+    else:
+        return int(hour >= open_h or hour < close_h)
+
+# ======================================================
+# Load Parking Excel Data
+# ======================================================
+def load_parking_excel(path: str) -> List[Dict[str, Any]]:
     try:
         xls = pd.ExcelFile(path)
     except Exception as e:
-        print(f"❌ Error opening Excel file: {e}")
+        logging.error(f"Error opening Excel file: {e}")
         return []
+
     all_rows = []
     for sheet in xls.sheet_names:
         try:
@@ -143,7 +135,6 @@ def load_parking_excel(path: str = "./PARKING.xlsx") -> List[Dict[str, Any]]:
                 "ADDRESS": "address",
                 "OPENING": "opening",
                 "CLOSING": "closing",
-                "LINK": "link",
                 "LATITUDE": "lat",
                 "LONGITUDE": "lng",
                 "GUARDS": "guards_raw",
@@ -152,139 +143,167 @@ def load_parking_excel(path: str = "./PARKING.xlsx") -> List[Dict[str, Any]]:
                 "PWD/SC DISCOUNT": "discount_raw",
                 "STREET PARKING": "street_raw",
             }
-            actual_map = {k: v for k, v in rename_map.items() if k in df.columns}
-            df = df.rename(columns=actual_map)
+            df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
             df = df.dropna(subset=["lat", "lng"])
             df["city"] = sheet
-            records = df.to_dict(orient="records")
-            all_rows.extend(records)
-            print(f"📄 Loaded {len(records)} rows from sheet '{sheet}'")
+            all_rows.extend(df.to_dict(orient="records"))
         except Exception as e:
-            print(f"⚠ Error reading sheet '{sheet}': {e}")
-    print(f"✅ Total parking rows loaded from Excel: {len(all_rows)}")
+            logging.warning(f"Error reading sheet {sheet}: {e}")
+
+    logging.info(f"Loaded {len(all_rows)} parking rows")
     return all_rows
 
-## Resolve data paths relative to this module so server can be started from project root
+# ======================================================
+# Paths & Model Loading
+# ======================================================
 MODULE_DIR = os.path.dirname(__file__)
+
 EXCEL_PATH = os.path.join(MODULE_DIR, "PARKING.xlsx")
-MODEL_PATH = os.path.join(MODULE_DIR, "parking_recommender_model_v6.joblib")
+RECOMMENDER_MODEL_PATH = os.path.join(MODULE_DIR, "parking_recommender_model_v6.joblib")
+NLP_MODEL_PATH = os.path.join(MODULE_DIR, "nlp_feedback_classifier.joblib")
 
 PARKINGS = load_parking_excel(EXCEL_PATH)
 
-# Load ML model
 try:
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
-    model = joblib.load(MODEL_PATH)
-    print(f"🤖 Model loaded. n_features_in_ = {getattr(model, 'n_features_in_', 'unknown')}")
+    recommender_model = joblib.load(RECOMMENDER_MODEL_PATH)
+    logging.info("Parking recommender model loaded")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
-    model = None
+    logging.error(f"Failed to load recommender model: {e}")
+    recommender_model = None
 
-# Request schema
+try:
+    nlp_model = joblib.load(NLP_MODEL_PATH)
+    logging.info("NLP feedback model loaded")
+except Exception as e:
+    logging.warning(f"NLP model not loaded: {e}")
+    nlp_model = None
+
+# ======================================================
+# Request / Response Schemas
+# ======================================================
 class ParkingRequest(BaseModel):
     user_lat: float
     user_lng: float
     time_of_day: int
     day_of_week: Optional[int] = None
 
+class FeedbackNLPRequest(BaseModel):
+    text: str
+    concern: Optional[str] = None
+
+class FeedbackNLPResponse(BaseModel):
+    sentiment: str
+    category: str
+
+# ======================================================
 # Endpoints
+# ======================================================
 @app.get("/")
 def home():
     return {"message": "Spark Parking API running!"}
 
+# ---------- NLP FEEDBACK ENDPOINT ----------
+@app.post("/analyze-feedback", response_model=FeedbackNLPResponse)
+def analyze_feedback(req: FeedbackNLPRequest):
+    if nlp_model is None:
+        raise HTTPException(status_code=500, detail="NLP model not loaded")
 
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Feedback text is empty")
 
+    try:
+        prediction = nlp_model.predict([text])[0]
+        result = {
+            "sentiment": prediction.get("sentiment", "Unknown"),
+            "category": prediction.get("category", "General"),
+        }
+
+        logging.info({
+            "feedback": text,
+            "sentiment": result["sentiment"],
+            "category": result["category"],
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"NLP analysis failed: {str(e)}")
+
+# ---------- PARKING RECOMMENDATION ----------
 @app.post("/recommend")
 def recommend(req: ParkingRequest, top_k: int = 5):
-    """Recommend top_k best parkings for the given user location & time."""
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded.")
-    
+    if recommender_model is None:
+        raise HTTPException(status_code=500, detail="Recommender model not loaded")
+
     feature_rows = []
     parking_info = []
 
-    # Get the current time
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    for idx, p in enumerate(PARKINGS):
+    for p in PARKINGS:
         try:
             lat = float(p["lat"])
             lng = float(p["lng"])
             dist_km = haversine_km(req.user_lat, req.user_lng, lat, lng)
-            opening = p.get("opening", None)
-            closing = p.get("closing", None)
-            open_now = compute_open_now(opening, closing, req.time_of_day)
 
-            cctvs = yn_to_int(p.get("cctvs_raw", p.get("CCTVS", "")))
-            guards = yn_to_int(p.get("guards_raw", p.get("GUARDS", "")))
-            initial_rate = rate_to_float(p.get("initial_rate_raw", p.get("INITIAL RATE", "")))
-            pwd_discount = discount_to_int(p.get("discount_raw", p.get("PWD/SC DISCOUNT", "")))
-            street_parking = yn_to_int(p.get("street_raw", p.get("STREET PARKING", "")))
+            open_now = compute_open_now(
+                p.get("opening"), p.get("closing"), req.time_of_day
+            )
 
-            feature_rows.append([dist_km, open_now, cctvs, guards, initial_rate, pwd_discount, street_parking])
+            features = [
+                dist_km,
+                open_now,
+                yn_to_int(p.get("cctvs_raw")),
+                yn_to_int(p.get("guards_raw")),
+                rate_to_float(p.get("initial_rate_raw")),
+                discount_to_int(p.get("discount_raw")),
+                yn_to_int(p.get("street_raw")),
+            ]
+
+            feature_rows.append(features)
             parking_info.append({
                 "name": p.get("name"),
+                "address": p.get("address"),
                 "lat": lat,
                 "lng": lng,
-                "address": p.get("address"),
-                "opening": opening,
-                "closing": closing,
-                "initial_rate": initial_rate,
-                "cctvs": cctvs,
-                "guards": guards,
+                "opening": p.get("opening"),
+                "closing": p.get("closing"),
+                "initial_rate": features[4],
                 "distance_km": dist_km,
-                "open_now": open_now
+                "open_now": open_now,
             })
+
         except Exception as e:
-            print(f"Error processing parking {p['name']}: {e}")
-            continue
+            logging.warning(f"Skipping parking due to error: {e}")
 
-    if not feature_rows:
-        raise HTTPException(status_code=500, detail="No valid feature rows to score.")
-    
     X = np.array(feature_rows, dtype=float)
-    try:
-        scores = model.predict(X)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model prediction failed: {str(e)}")
+    scores = recommender_model.predict(X)
 
-    results = [{"name": p["name"], "score": score, **p} for p, score in zip(parking_info, scores)]
+    results = [
+        {**info, "score": score}
+        for info, score in zip(parking_info, scores)
+    ]
+
     results = sorted(results, key=lambda r: r["score"], reverse=True)[:top_k]
-    
-    # Return the current time along with the recommendations
-    response_obj = {"recommendations": results, "current_time": current_time}
-    data = jsonable_encoder(response_obj)
-    return sanitize_for_json(data)
 
+    response = {
+        "recommendations": results,
+        "current_time": current_time,
+    }
+
+    return sanitize_for_json(jsonable_encoder(response))
+
+# ======================================================
+# JSON Sanitizer
+# ======================================================
 def sanitize_for_json(obj):
-    # Recursively sanitize containers
     if isinstance(obj, dict):
         return {k: sanitize_for_json(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [sanitize_for_json(v) for v in obj]
-
-    # Handle numpy types (scalars and arrays) if numpy is available
-    try:
-        import numpy as _np
-
-        # numpy scalar numbers
-        if isinstance(obj, (_np.floating, _np.integer)):
-            val = obj.item()
-            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
-                return None
-            return val
-
-        # numpy arrays -> convert to lists and sanitize
-        if isinstance(obj, _np.ndarray):
-            return [sanitize_for_json(v) for v in obj.tolist()]
-    except Exception:
-        pass
-
-    # Python float NaN/Inf
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
-        return obj
-
     return obj
