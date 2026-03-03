@@ -18,17 +18,17 @@ Structured data handling and workflow design
 
 The application follows a full-stack architecture consisting of:
 
-📱 Mobile Frontend
+Mobile Frontend
 
-🔌 Backend API (FastAPI)
+Backend API (FastAPI)
 
-🧠 Integrated ML Service
+Integrated ML Service
 
-🗄️ Supabase Database
+Supabase Database
 
-🗺️ Routing Engine (A* and Bidirectional Search)
+Routing Engine (A* and Bidirectional Search)
 
-🛠️ Technologies Used
+Technologies Used
 
 Mobile Application Development
 
